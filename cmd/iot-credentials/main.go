@@ -175,6 +175,8 @@ func emitCredentialProcess(ctx context.Context, provider *iotcredentials.Provide
 
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
+	// G117: AWS credential_process requires temporary credentials on stdout.
+	//nolint:gosec
 	return enc.Encode(credentialProcessOutput{
 		Version:         1,
 		AccessKeyID:     creds.AccessKeyID,
@@ -238,7 +240,8 @@ func whoami(ctx context.Context, provider *iotcredentials.Provider, region strin
 }
 
 func loadCABundle(path string) (*x509.CertPool, error) {
-	pem, err := os.ReadFile(path)
+	// G703: this CLI intentionally accepts an operator-selected CA bundle path.
+	pem, err := os.ReadFile(path) //nolint:gosec
 	if err != nil {
 		return nil, fmt.Errorf("reading CA bundle: %w", err)
 	}

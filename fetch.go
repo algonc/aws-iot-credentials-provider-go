@@ -108,9 +108,9 @@ func (p *Provider) do(ctx context.Context) ([]byte, error) {
 			return nil, lastErr
 		}
 		if err := sleep(ctx, p.backoff(attempt)); err != nil {
-			// Report the AWS failure, not the cancellation that stopped us
-			// from retrying it.
-			return nil, fmt.Errorf("%w (retries abandoned: %v)", lastErr, err)
+			// Preserve both the AWS failure and the cancellation that stopped
+			// the retry loop so callers can inspect either cause.
+			return nil, fmt.Errorf("%w (retries abandoned: %w)", lastErr, err)
 		}
 	}
 }
@@ -199,7 +199,7 @@ func (p *Provider) retryable(err error) bool {
 }
 
 // backoff returns the delay before the attempt after the given one, using
-// exponential growth with full jitter so that a fleet refreshing at the same
+// exponential growth with equal jitter so that a fleet refreshing at the same
 // moment spreads out instead of retrying in lockstep.
 func (p *Provider) backoff(attempt int) time.Duration {
 	const maxDelay = 20 * time.Second
@@ -208,7 +208,8 @@ func (p *Provider) backoff(attempt int) time.Duration {
 	if delay > maxDelay || delay <= 0 {
 		delay = maxDelay
 	}
-	return delay/2 + time.Duration(rand.Int64N(int64(delay/2)+1))
+	// G404: retry jitter needs distribution, not cryptographic unpredictability.
+	return delay/2 + time.Duration(rand.Int64N(int64(delay/2)+1)) //nolint:gosec
 }
 
 // sleep waits for d, or returns early if ctx is done.

@@ -195,7 +195,7 @@ restrict its trust policy with `aws:SourceAccount` and the role alias ARN in
   lifetime, preventing short-lived credentials from being refreshed on every
   call.
 - **Retries:** transport errors, HTTP 429, and HTTP 5xx responses are retried
-  with exponential backoff and full jitter. Add other retryable statuses with
+  with exponential backoff and equal jitter. Add other retryable statuses with
   `WithRetryOnStatus`.
 - **Certificate rotation:** file-based certificate and key pairs are reloaded
   for each TLS handshake, so replacements are picked up without restarting the

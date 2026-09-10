@@ -67,10 +67,10 @@ func newCA(t *testing.T, commonName string) keyPair {
 
 // issueClient issues a leaf client certificate, as the device certificate in
 // the shell proof of concept.
-func (ca keyPair) issueClient(t *testing.T, commonName string) keyPair {
+func (kp keyPair) issueClient(t *testing.T, commonName string) keyPair {
 	t.Helper()
 
-	return issue(t, &ca, &x509.Certificate{
+	return issue(t, &kp, &x509.Certificate{
 		SerialNumber: serial(t),
 		Subject:      pkix.Name{CommonName: commonName},
 		NotBefore:    time.Now().Add(-time.Hour),
@@ -81,10 +81,10 @@ func (ca keyPair) issueClient(t *testing.T, commonName string) keyPair {
 }
 
 // issueServer issues the certificate presented by the fake AWS IoT endpoint.
-func (ca keyPair) issueServer(t *testing.T) keyPair {
+func (kp keyPair) issueServer(t *testing.T) keyPair {
 	t.Helper()
 
-	return issue(t, &ca, &x509.Certificate{
+	return issue(t, &kp, &x509.Certificate{
 		SerialNumber: serial(t),
 		Subject:      pkix.Name{CommonName: "credentials.iot.test"},
 		NotBefore:    time.Now().Add(-time.Hour),

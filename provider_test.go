@@ -24,6 +24,35 @@ import (
 	"time"
 )
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+// observedCancelContext reports when its Done channel is first requested. The
+// test below uses that signal to cancel precisely after the retry sleep starts.
+type observedCancelContext struct {
+	context.Context
+	done       chan struct{}
+	doneCalled chan struct{}
+	once       sync.Once
+}
+
+func (ctx *observedCancelContext) Done() <-chan struct{} {
+	ctx.once.Do(func() { close(ctx.doneCalled) })
+	return ctx.done
+}
+
+func (ctx *observedCancelContext) Err() error {
+	select {
+	case <-ctx.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
 func TestRetrieveReturnsCredentials(t *testing.T) {
 	expiration := time.Now().Add(15 * time.Minute).Truncate(time.Second)
 	endpoint := newFakeEndpoint(t, expiration)
@@ -327,6 +356,67 @@ func TestRetriesExhausted(t *testing.T) {
 	// The initial attempt plus two retries.
 	if got := endpoint.count(); got != 3 {
 		t.Errorf("endpoint received %d requests, want 3", got)
+	}
+}
+
+func TestCancellationDuringRetryBackoffPreservesBothCauses(t *testing.T) {
+	ctx := &observedCancelContext{
+		Context:    context.Background(),
+		done:       make(chan struct{}),
+		doneCalled: make(chan struct{}),
+	}
+
+	requests := 0
+	provider := &Provider{
+		opts: Options{
+			MaxRetries:     1,
+			RetryBaseDelay: time.Minute,
+		},
+		requestURL: "https://credentials.iot.test",
+		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			requests++
+			return &http.Response{
+				StatusCode: http.StatusServiceUnavailable,
+				Header:     make(http.Header),
+				Body:       http.NoBody,
+				Request:    req,
+			}, nil
+		})},
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := provider.do(ctx)
+		result <- err
+	}()
+
+	select {
+	case <-ctx.doneCalled:
+		close(ctx.done)
+	case <-time.After(time.Second):
+		close(ctx.done)
+		t.Fatal("provider did not enter retry backoff")
+	}
+
+	var err error
+	select {
+	case err = <-result:
+	case <-time.After(time.Second):
+		t.Fatal("provider did not stop after cancellation")
+	}
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, want context.Canceled in its chain", err)
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error = %T (%v), want *APIError in its chain", err, err)
+	}
+	if apiErr.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", apiErr.StatusCode, http.StatusServiceUnavailable)
+	}
+	if requests != 1 {
+		t.Errorf("requests = %d, want 1", requests)
 	}
 }
 

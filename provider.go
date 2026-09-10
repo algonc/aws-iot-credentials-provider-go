@@ -237,7 +237,7 @@ func newHTTPClient(p *Provider, opts Options) *http.Client {
 			ForceAttemptHTTP2:   true,
 		},
 		// Credentials must never be sent to a redirect target.
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
 			return fmt.Errorf("iotcredentials: unexpected redirect to %s", req.URL.Redacted())
 		},
 	}
