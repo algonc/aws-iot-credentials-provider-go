@@ -26,6 +26,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -49,7 +50,7 @@ type credentialProcessOutput struct {
 }
 
 func main() {
-	if err := run(); err != nil {
+	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 
 		// Surface the AWS status code for scripting.
@@ -63,8 +64,9 @@ func main() {
 	}
 }
 
-func run() error {
+func run(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("iot-credentials", flag.ContinueOnError)
+	fs.SetOutput(stderr)
 
 	endpoint := fs.String("endpoint", os.Getenv("AWS_IOT_CREDENTIALS_ENDPOINT"),
 		"iot:CredentialProvider endpoint (env AWS_IOT_CREDENTIALS_ENDPOINT)")
@@ -94,7 +96,7 @@ func run() error {
 		fs.PrintDefaults()
 	}
 
-	if err := fs.Parse(os.Args[1:]); err != nil {
+	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
@@ -156,24 +158,24 @@ func run() error {
 
 	switch command {
 	case "credential-process":
-		return emitCredentialProcess(ctx, provider)
+		return emitCredentialProcess(ctx, provider, stdout)
 	case "env":
-		return emitEnv(ctx, provider)
+		return emitEnv(ctx, provider, stdout)
 	case "whoami":
-		return whoami(ctx, provider, *region)
+		return whoami(ctx, provider, *region, stdout)
 	default:
 		fs.Usage()
 		return fmt.Errorf("unknown command %q", command)
 	}
 }
 
-func emitCredentialProcess(ctx context.Context, provider *iotcredentials.Provider) error {
+func emitCredentialProcess(ctx context.Context, provider aws.CredentialsProvider, out io.Writer) error {
 	creds, err := provider.Retrieve(ctx)
 	if err != nil {
 		return err
 	}
 
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")
 	// G117: AWS credential_process requires temporary credentials on stdout.
 	//nolint:gosec
@@ -186,22 +188,22 @@ func emitCredentialProcess(ctx context.Context, provider *iotcredentials.Provide
 	})
 }
 
-func emitEnv(ctx context.Context, provider *iotcredentials.Provider) error {
+func emitEnv(ctx context.Context, provider aws.CredentialsProvider, out io.Writer) error {
 	creds, err := provider.Retrieve(ctx)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("export AWS_ACCESS_KEY_ID=%s\n", shellQuote(creds.AccessKeyID))
-	fmt.Printf("export AWS_SECRET_ACCESS_KEY=%s\n", shellQuote(creds.SecretAccessKey))
-	fmt.Printf("export AWS_SESSION_TOKEN=%s\n", shellQuote(creds.SessionToken))
-	fmt.Printf("# expires %s (in %s)\n",
+	fmt.Fprintf(out, "export AWS_ACCESS_KEY_ID=%s\n", shellQuote(creds.AccessKeyID))
+	fmt.Fprintf(out, "export AWS_SECRET_ACCESS_KEY=%s\n", shellQuote(creds.SecretAccessKey))
+	fmt.Fprintf(out, "export AWS_SESSION_TOKEN=%s\n", shellQuote(creds.SessionToken))
+	fmt.Fprintf(out, "# expires %s (in %s)\n",
 		creds.Expires.UTC().Format(time.RFC3339),
 		time.Until(creds.Expires).Round(time.Second))
 	return nil
 }
 
-func whoami(ctx context.Context, provider *iotcredentials.Provider, region string) error {
+func whoami(ctx context.Context, provider *iotcredentials.Provider, region string, out io.Writer) error {
 	if region == "" {
 		return errors.New("a region is required for whoami; pass -region or set AWS_REGION")
 	}
@@ -229,11 +231,11 @@ func whoami(ctx context.Context, provider *iotcredentials.Provider, region strin
 		return err
 	}
 
-	fmt.Printf("Endpoint:   %s\n", provider.RequestURL())
-	fmt.Printf("Account:    %s\n", aws.ToString(identity.Account))
-	fmt.Printf("ARN:        %s\n", aws.ToString(identity.Arn))
-	fmt.Printf("UserId:     %s\n", aws.ToString(identity.UserId))
-	fmt.Printf("Expiration: %s (in %s)\n",
+	fmt.Fprintf(out, "Endpoint:   %s\n", provider.RequestURL())
+	fmt.Fprintf(out, "Account:    %s\n", aws.ToString(identity.Account))
+	fmt.Fprintf(out, "ARN:        %s\n", aws.ToString(identity.Arn))
+	fmt.Fprintf(out, "UserId:     %s\n", aws.ToString(identity.UserId))
+	fmt.Fprintf(out, "Expiration: %s (in %s)\n",
 		creds.Expires.UTC().Format(time.RFC3339),
 		time.Until(creds.Expires).Round(time.Second))
 	return nil
