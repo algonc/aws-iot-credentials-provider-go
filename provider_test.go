@@ -17,10 +17,12 @@ package iotcredentials
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -273,6 +275,9 @@ func TestAPIErrorNotRetried(t *testing.T) {
 	if apiErr.StatusCode != http.StatusForbidden {
 		t.Errorf("StatusCode = %d, want 403", apiErr.StatusCode)
 	}
+	if apiErr.HTTPStatusCode() != http.StatusForbidden {
+		t.Errorf("HTTPStatusCode() = %d, want 403", apiErr.HTTPStatusCode())
+	}
 	if apiErr.Message != "access denied" {
 		t.Errorf("Message = %q, want %q", apiErr.Message, "access denied")
 	}
@@ -307,6 +312,109 @@ func TestRetriesServerErrors(t *testing.T) {
 	}
 	if got := endpoint.count(); got != 3 {
 		t.Errorf("endpoint received %d requests, want 3", got)
+	}
+}
+
+func TestCustomHTTPClientRetriesTransportError(t *testing.T) {
+	transportErr := errors.New("temporary transport failure")
+	requests := 0
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		if requests == 1 {
+			return nil, transportErr
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body: io.NopCloser(strings.NewReader(`{"credentials":{` +
+				`"accessKeyId":"ASIAEXAMPLE",` +
+				`"secretAccessKey":"secret-example",` +
+				`"sessionToken":"token-example",` +
+				`"expiration":"2099-01-01T00:00:00Z"}}`)),
+			Request: req,
+		}, nil
+	})}
+
+	provider, err := NewProvider(
+		WithEndpoint("credentials.iot.test"),
+		WithRoleAlias("test-role"),
+		WithTimeout(3*time.Second),
+		WithMaxRetries(1),
+		WithRetryBaseDelay(time.Nanosecond),
+		WithHTTPClient(client),
+	)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	if provider.opts.Timeout != 3*time.Second {
+		t.Errorf("Timeout = %s, want 3s", provider.opts.Timeout)
+	}
+	if _, err := provider.Retrieve(context.Background()); err != nil {
+		t.Fatalf("Retrieve: %v", err)
+	}
+	if requests != 2 {
+		t.Errorf("requests = %d, want 2", requests)
+	}
+}
+
+func TestSuccessfulResponseReadError(t *testing.T) {
+	readErr := errors.New("response read failed")
+	provider := &Provider{
+		requestURL: "https://credentials.iot.test",
+		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(iotest.ErrReader(readErr)),
+				Request:    req,
+			}, nil
+		})},
+	}
+
+	_, err := provider.attempt(context.Background())
+	if !errors.Is(err, readErr) {
+		t.Errorf("error = %v, want %v", err, readErr)
+	}
+}
+
+func TestAPIErrorAlternateMessageAndTruncation(t *testing.T) {
+	resp := &http.Response{StatusCode: http.StatusBadRequest, Header: make(http.Header)}
+	apiErr := newAPIError(resp, []byte(`{"Message":"alternate message"}`))
+	if apiErr.Message != "alternate message" {
+		t.Errorf("Message = %q, want alternate message", apiErr.Message)
+	}
+
+	longBody := strings.Repeat("x", maxErrorBodyBytes+1)
+	apiErr = newAPIError(resp, []byte(longBody))
+	if !strings.HasSuffix(apiErr.Body, "... (truncated)") {
+		t.Errorf("Body suffix = %q, want truncation marker", apiErr.Body[len(apiErr.Body)-20:])
+	}
+}
+
+func TestHTTPClientRejectsRedirects(t *testing.T) {
+	client := newHTTPClient(&Provider{}, Options{})
+	req, err := http.NewRequest(http.MethodGet, "https://redirect.example/path", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	err = client.CheckRedirect(req, nil)
+	if err == nil || !strings.Contains(err.Error(), "unexpected redirect") {
+		t.Fatalf("CheckRedirect error = %v, want redirect rejection", err)
+	}
+}
+
+func TestNegativeMaxRetriesNormalized(t *testing.T) {
+	provider, err := NewProvider(
+		WithEndpoint("credentials.iot.test"),
+		WithRoleAlias("test-role"),
+		WithMaxRetries(-1),
+		WithHTTPClient(&http.Client{}),
+	)
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	if provider.opts.MaxRetries != 0 {
+		t.Errorf("MaxRetries = %d, want 0", provider.opts.MaxRetries)
 	}
 }
 
@@ -610,6 +718,15 @@ func TestNewProviderValidation(t *testing.T) {
 			want: "invalid character",
 		},
 		{
+			name: "role alias too long",
+			opts: func(t *testing.T) []Option {
+				cert, key := validPEM(t)
+				return []Option{WithEndpoint("example.credentials.iot.eu-central-1.amazonaws.com"),
+					WithRoleAlias(strings.Repeat("a", 129)), WithKeyPairPEM(cert, key)}
+			},
+			want: "at most 128 characters",
+		},
+		{
 			name: "missing key material",
 			opts: func(*testing.T) []Option {
 				return []Option{WithEndpoint("example.credentials.iot.eu-central-1.amazonaws.com"),
@@ -624,6 +741,32 @@ func TestNewProviderValidation(t *testing.T) {
 					WithRoleAlias("alias"), WithCertificatePath("/tmp/cert.pem")}
 			},
 			want: "private key path is required",
+		},
+		{
+			name: "private key without certificate",
+			opts: func(*testing.T) []Option {
+				return []Option{WithEndpoint("example.credentials.iot.eu-central-1.amazonaws.com"),
+					WithRoleAlias("alias"), WithPrivateKeyPath("/tmp/key.pem")}
+			},
+			want: "certificate path is required",
+		},
+		{
+			name: "PEM certificate without key",
+			opts: func(t *testing.T) []Option {
+				cert, _ := validPEM(t)
+				return []Option{WithEndpoint("example.credentials.iot.eu-central-1.amazonaws.com"),
+					WithRoleAlias("alias"), WithKeyPairPEM(cert, nil)}
+			},
+			want: "private key PEM is empty",
+		},
+		{
+			name: "PEM key without certificate",
+			opts: func(t *testing.T) []Option {
+				_, key := validPEM(t)
+				return []Option{WithEndpoint("example.credentials.iot.eu-central-1.amazonaws.com"),
+					WithRoleAlias("alias"), WithKeyPairPEM(nil, key)}
+			},
+			want: "certificate PEM is empty",
 		},
 		{
 			name: "mismatched key pair",
@@ -686,6 +829,7 @@ func TestNormalizeEndpoint(t *testing.T) {
 		{in: "", wantErr: true},
 		{in: "   ", wantErr: true},
 		{in: "http://" + host, wantErr: true},
+		{in: "https://%", wantErr: true},
 		{in: host + "/role-aliases", wantErr: true},
 	}
 
