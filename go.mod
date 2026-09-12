@@ -1,6 +1,6 @@
 module github.com/algonc/aws-iot-credentials-provider-go
 
-go 1.24
+go 1.25
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.45.1

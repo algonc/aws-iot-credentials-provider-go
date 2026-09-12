@@ -19,7 +19,7 @@ access key.
 
 ## Requirements
 
-- Go 1.24 or later
+- Go 1.25 or later
 - An AWS IoT credentials provider endpoint
 - An active AWS IoT certificate and its private key
 - An AWS IoT role alias backed by an IAM role
