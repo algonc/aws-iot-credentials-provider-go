@@ -29,6 +29,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -263,8 +264,8 @@ func parseStatusCodes(list string) ([]int, error) {
 			continue
 		}
 
-		var code int
-		if _, err := fmt.Sscanf(field, "%d", &code); err != nil || code < 100 || code > 599 {
+		code, err := strconv.Atoi(field)
+		if err != nil || code < 100 || code > 599 {
 			return nil, fmt.Errorf("invalid HTTP status code %q", field)
 		}
 		codes = append(codes, code)

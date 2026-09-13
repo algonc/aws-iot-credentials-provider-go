@@ -263,6 +263,7 @@ func TestParseStatusCodes(t *testing.T) {
 		{name: "empty fields", input: " ,403,, ", want: []int{403}},
 		{name: "empty", input: ""},
 		{name: "not a number", input: "invalid", wantErr: true},
+		{name: "trailing garbage", input: "403oops", wantErr: true},
 		{name: "below HTTP range", input: "99", wantErr: true},
 		{name: "above HTTP range", input: "600", wantErr: true},
 	}
