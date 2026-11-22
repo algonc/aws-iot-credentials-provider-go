@@ -242,6 +242,10 @@ mandatory client-certificate verification. They cover request construction,
 credential parsing, caching, retries, error mapping, certificate formats, and
 certificate rotation without contacting AWS.
 
+## Releasing
+
+See the [release guide](RELEASING.md) for the maintainer release process.
+
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE).
